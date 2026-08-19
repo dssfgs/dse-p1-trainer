@@ -1,0 +1,158 @@
+<script>
+// Language dictionaries. Keys are used via data-i18n attributes and T(key).
+var I18N = {
+  zh: {
+    'app.title': 'DSE 卷一訓練',
+    'nav.home': '首頁',
+    'nav.teacher': '班級總覽',
+    'login.title': '選擇你的名字',
+    'login.hint': '系統無法自動識別你的 Google 帳戶，請從名單中選擇。',
+    'login.confirm': '確認',
+    'year.title': '選擇年份',
+    'year.overview': '年份 × 部分總覽',
+    'year.overviewHint': '每格顯示：最新分 / 最高分（次數）',
+    'section.title': '選擇部分',
+    'section.hint': '先用紙本或官方試卷作答，再回來逐小題輸入分數。',
+    'quiz.openPaper': '開啟試卷',
+    'quiz.draftFound': '找到未完成的草稿。',
+    'quiz.resume': '繼續',
+    'quiz.discard': '丟棄',
+    'quiz.note': '備註（錯因、時間感覺等）',
+    'quiz.fillZero': '空白填 0',
+    'quiz.submit': '提交',
+    'quiz.submitting': '提交中…',
+    'quiz.blankLeft': '尚有 {n} 個小題未填分數。',
+    'quiz.fillZeroConfirm': '確定將 {n} 個空白小題全部填為 0 分？',
+    'quiz.total': '本部分',
+    'report.title': '成績報告',
+    'report.trend': '歷次趨勢',
+    'report.byQuestion': '各題得分',
+    'report.weakTopics': '弱項課題',
+    'report.strand': '三大範疇',
+    'report.recent': '最近 10 次',
+    'report.attemptNo': '第 {n} 次',
+    'report.latest': '最新',
+    'report.best': '最高',
+    'report.sample': '課題需至少 {n} 個小題才作判斷；低於 {p}% 標紅。',
+    'report.noData': '尚無資料。',
+    'teacher.title': '班級總覽',
+    'teacher.apply': '套用',
+    'teacher.students': '學生',
+    'teacher.weakest': '全班最弱 5 個課題',
+    'teacher.allClasses': '所有班別',
+    'teacher.allYears': '所有年份',
+    'teacher.allSections': '所有部分',
+    'teacher.activeStudents': '活躍學生',
+    'teacher.submissions': '提交次數',
+    'teacher.avgRate': '平均得分率',
+    'th.year': '年份', 'th.section': '部分', 'th.score': '分數', 'th.percent': '百分比',
+    'th.attempt': '次數', 'th.date': '日期', 'th.name': '姓名', 'th.class': '班別',
+    'th.last': '最近活動', 'th.done': '完成部分', 'th.latest': '最新', 'th.best': '最高',
+    'th.avg': '平均', 'th.weak': '弱項', 'th.topic': '課題', 'th.rate': '得分率', 'th.parts': '小題數',
+    'sync.pending': '有 {n} 筆成績未上傳。',
+    'sync.retryNow': '立即重試',
+    'sync.retrying': '正在重試（第 {n} 次）…',
+    'sync.saved': '已上傳。',
+    'sync.offline': '目前似乎離線，成績已暫存於此裝置。',
+    'err.generic': '發生錯誤：',
+    'err.timeout': '連線逾時，成績已暫存，稍後會自動重試。',
+    'foot.note': '本站不存放試題內容；試題版權屬 HKEAA。'
+  },
+  en: {
+    'app.title': 'DSE Paper 1 Trainer',
+    'nav.home': 'Home',
+    'nav.teacher': 'Class overview',
+    'login.title': 'Select your name',
+    'login.hint': 'Your Google account could not be identified. Please pick your name.',
+    'login.confirm': 'Confirm',
+    'year.title': 'Select year',
+    'year.overview': 'Year x section overview',
+    'year.overviewHint': 'Each cell shows latest / best (attempts)',
+    'section.title': 'Select section',
+    'section.hint': 'Work on the paper first, then enter your marks part by part.',
+    'quiz.openPaper': 'Open paper',
+    'quiz.draftFound': 'An unfinished draft was found.',
+    'quiz.resume': 'Resume',
+    'quiz.discard': 'Discard',
+    'quiz.note': 'Note (mistakes, pacing, etc.)',
+    'quiz.fillZero': 'Fill blanks with 0',
+    'quiz.submit': 'Submit',
+    'quiz.submitting': 'Submitting...',
+    'quiz.blankLeft': '{n} part(s) still have no mark.',
+    'quiz.fillZeroConfirm': 'Fill all {n} blank part(s) with 0?',
+    'quiz.total': 'Section',
+    'report.title': 'Report',
+    'report.trend': 'Attempt trend',
+    'report.byQuestion': 'Marks by question',
+    'report.weakTopics': 'Weak topics',
+    'report.strand': 'Strands',
+    'report.recent': 'Last 10 attempts',
+    'report.attemptNo': 'Attempt {n}',
+    'report.latest': 'Latest',
+    'report.best': 'Best',
+    'report.sample': 'A topic needs at least {n} parts before judging; below {p}% is flagged.',
+    'report.noData': 'No data yet.',
+    'teacher.title': 'Class overview',
+    'teacher.apply': 'Apply',
+    'teacher.students': 'Students',
+    'teacher.weakest': '5 weakest topics',
+    'teacher.allClasses': 'All classes',
+    'teacher.allYears': 'All years',
+    'teacher.allSections': 'All sections',
+    'teacher.activeStudents': 'Active students',
+    'teacher.submissions': 'Submissions',
+    'teacher.avgRate': 'Average rate',
+    'th.year': 'Year', 'th.section': 'Section', 'th.score': 'Score', 'th.percent': '%',
+    'th.attempt': 'Attempt', 'th.date': 'Date', 'th.name': 'Name', 'th.class': 'Class',
+    'th.last': 'Last active', 'th.done': 'Sections done', 'th.latest': 'Latest', 'th.best': 'Best',
+    'th.avg': 'Average', 'th.weak': 'Weakest', 'th.topic': 'Topic', 'th.rate': 'Rate', 'th.parts': 'Parts',
+    'sync.pending': '{n} result(s) not uploaded.',
+    'sync.retryNow': 'Retry now',
+    'sync.retrying': 'Retrying (attempt {n})...',
+    'sync.saved': 'Uploaded.',
+    'sync.offline': 'You appear to be offline. Marks are stored on this device.',
+    'err.generic': 'Error: ',
+    'err.timeout': 'Request timed out. Marks are stored and will retry automatically.',
+    'foot.note': 'No exam content is stored here; papers are copyright of the HKEAA.'
+  }
+};
+
+var LANG_KEY = 'dsep1.lang.v1';
+var LANG = (function () {
+  try { return localStorage.getItem(LANG_KEY) || 'zh'; } catch (e) { return 'zh'; }
+})();
+
+function T(key, vars) {
+  var dict = I18N[LANG] || I18N.zh;
+  var s = dict[key] || (I18N.zh[key] || key);
+  if (vars) {
+    Object.keys(vars).forEach(function (k) {
+      s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]);
+    });
+  }
+  return s;
+}
+
+function applyI18n() {
+  var nodes = document.querySelectorAll('[data-i18n]');
+  for (var i = 0; i < nodes.length; i++) {
+    nodes[i].textContent = T(nodes[i].getAttribute('data-i18n'));
+  }
+  var btn = document.getElementById('btnLang');
+  if (btn) btn.textContent = (LANG === 'zh') ? 'EN' : '中';
+  document.documentElement.lang = (LANG === 'zh') ? 'zh-Hant' : 'en';
+}
+
+function setLang(lang) {
+  LANG = lang;
+  try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+  applyI18n();
+  if (window.onLangChanged) window.onLangChanged();
+}
+
+function topicName(t) {
+  if (!t) return '';
+  return LANG === 'zh' ? (t.nameZh || t.topicZh || t.zh || t.topicId)
+                       : (t.nameEn || t.topicEn || t.en || t.topicId);
+}
+</script>

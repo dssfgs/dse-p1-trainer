@@ -1,0 +1,705 @@
+<script src="https://www.gstatic.com/charts/loader.js"></script>
+<script>
+/* ==========================================================================
+   DSE Paper 1 Trainer — client side
+   Consensus doc v1.4 (D6 draft, D7 stepper input, D11 queue + backoff retry)
+   ========================================================================== */
+
+var SCHEMA = 'v1';
+var K = {
+  draft: function (sid, y, s) { return 'dsep1.draft.' + SCHEMA + '.' + sid + '.' + y + '.' + s; },
+  queue: function (sid) { return 'dsep1.queue.' + SCHEMA + '.' + sid; },
+  picked: 'dsep1.picked.' + SCHEMA
+};
+var RETRY_DELAYS = [2000, 5000, 15000, 30000];
+var CALL_TIMEOUT = 20000;
+
+var S = {
+  boot: null,
+  studentId: '',
+  year: '',
+  section: '',
+  quiz: null,
+  draftTimer: null,
+  retryTimer: null,
+  chartsReady: false,
+  lastReport: null
+};
+
+/* ------------------------------------------------------------- storage utils */
+
+function lsGet(key, fallback) {
+  try {
+    var raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) { return fallback; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+}
+function lsDel(key) {
+  try { localStorage.removeItem(key); } catch (e) {}
+}
+function uuid() {
+  return 'a-' + Date.now().toString(36) + '-' +
+    Math.random().toString(36).slice(2, 10);
+}
+function pct(x) { return (Math.round(x * 1000) / 10).toFixed(1); }
+function fmtDate(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : ''; }
+
+/* --------------------------------------------------- server call with timeout
+   withFailureHandler only fires when the SERVER throws. When the device is
+   offline the request never leaves the browser, so we add our own timeout.   */
+
+function callServer(fn, args, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      reject(new Error('__timeout__'));
+    }, timeoutMs || CALL_TIMEOUT);
+
+    google.script.run
+      .withSuccessHandler(function (res) {
+        if (done) return;
+        done = true; clearTimeout(timer); resolve(res);
+      })
+      .withFailureHandler(function (err) {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        reject(new Error(err && err.message ? err.message : String(err)));
+      })[fn].apply(null, args || []);
+  });
+}
+
+function busy(on) {
+  document.getElementById('loading').classList.toggle('hidden', !on);
+}
+
+/* --------------------------------------------------------------- screen router */
+
+function show(id) {
+  ['screen-login', 'screen-year', 'screen-section', 'screen-quiz', 'screen-report', 'screen-teacher']
+    .forEach(function (s) {
+      document.getElementById(s).classList.toggle('hidden', s !== id);
+    });
+  window.scrollTo(0, 0);
+}
+
+/* ------------------------------------------------------------------- bootstrap */
+
+function boot() {
+  busy(true);
+  var picked = lsGet(K.picked, '');
+  callServer('getBootstrap', [picked])
+    .then(function (b) {
+      S.boot = b;
+      document.getElementById('btnTeacher').classList.toggle('hidden', b.user.role !== 'teacher');
+      if (b.needPicker && !b.resolvedStudent) {
+        renderPicker(b.studentOptions);
+        show('screen-login');
+      } else {
+        S.studentId = b.resolvedStudent || b.user.email;
+        document.getElementById('userBadge').textContent =
+          b.user.displayName || S.studentId;
+        startQueueWatcher();
+        goYears();
+      }
+    })
+    .catch(function (e) { alert(T('err.generic') + e.message); })
+    .then(function () { busy(false); });
+}
+
+function renderPicker(options) {
+  var sel = document.getElementById('studentPicker');
+  sel.innerHTML = '';
+  options.filter(function (o) { return o.role === 'student'; }).forEach(function (o) {
+    var op = document.createElement('option');
+    op.value = o.email;
+    op.textContent = o.displayName + (o.klass ? ' (' + o.klass + ')' : '');
+    sel.appendChild(op);
+  });
+}
+
+/* ------------------------------------------------------------ year + overview */
+
+function goYears() {
+  show('screen-year');
+  var grid = document.getElementById('yearGrid');
+  grid.innerHTML = '';
+  (S.boot.years || []).forEach(function (y) {
+    var b = document.createElement('button');
+    b.className = 'tile';
+    b.innerHTML = '<b>' + y + '</b><span>A1 / A2 / B</span>';
+    b.onclick = function () { goSections(y); };
+    grid.appendChild(b);
+  });
+  loadDashboard();
+}
+
+function goSections(year) {
+  S.year = year;
+  document.getElementById('secTitleYear').textContent = year;
+  show('screen-section');
+}
+
+/* ------------------------------------------------------------- score entry UI */
+
+function openQuiz(section) {
+  S.section = section;
+  busy(true);
+  callServer('getSectionQuestions', [S.year, section])
+    .then(function (q) {
+      S.quiz = q;
+      renderQuiz(q);
+      show('screen-quiz');
+    })
+    .catch(function (e) { alert(T('err.generic') + e.message); })
+    .then(function () { busy(false); });
+}
+
+function secClass(s) { return s === 'A1' ? 'a1' : (s === 'A2' ? 'a2' : 'b'); }
+
+function renderQuiz(q) {
+  document.getElementById('quizTitle').textContent =
+    q.year + '　' + (q.section === 'A1' ? 'A(1)' : q.section === 'A2' ? 'A(2)' : 'B');
+  var link = document.getElementById('paperLink');
+  if (q.paperUrl) { link.href = q.paperUrl; link.classList.remove('hidden'); }
+  else link.classList.add('hidden');
+
+  document.getElementById('quizError').classList.add('hidden');
+  document.getElementById('attemptNote').value = '';
+
+  var wrap = document.getElementById('questionList');
+  wrap.innerHTML = '';
+  q.questions.forEach(function (g) {
+    var card = document.createElement('div');
+    card.className = 'qcard ' + secClass(q.section);
+    var head = document.createElement('div');
+    head.className = 'qhead';
+    head.innerHTML = '<b>Q' + g.qno + '</b><span class="qsub" id="sub-' + g.qno + '">0 / ' + g.maxMark + '</span>';
+    card.appendChild(head);
+
+    g.parts.forEach(function (p) {
+      var row = document.createElement('div');
+      row.className = 'partrow';
+      var label = document.createElement('div');
+      label.className = 'partlabel';
+      label.innerHTML = '<span>' + (p.part ? '(' + p.part + ')' : '—') + '</span>' +
+        '<span class="parttopic">' + topicName(p) + '</span>';
+      row.appendChild(label);
+
+      var st = document.createElement('div');
+      st.className = 'stepper';
+      var minus = document.createElement('button');
+      minus.type = 'button'; minus.textContent = '−';
+      var input = document.createElement('input');
+      input.type = 'number'; input.inputMode = 'numeric';
+      input.min = 0; input.max = p.maxMark; input.step = 1;
+      input.dataset.qid = p.qid; input.dataset.qno = g.qno; input.dataset.max = p.maxMark;
+      var plus = document.createElement('button');
+      plus.type = 'button'; plus.textContent = '+';
+      var max = document.createElement('span');
+      max.className = 'max'; max.textContent = '/ ' + p.maxMark;
+
+      minus.onclick = function () { bump(input, -1); };
+      plus.onclick = function () { bump(input, 1); };
+      input.oninput = function () { onScoreChange(); };
+
+      st.appendChild(minus); st.appendChild(input); st.appendChild(plus); st.appendChild(max);
+      row.appendChild(st);
+      card.appendChild(row);
+    });
+    wrap.appendChild(card);
+  });
+
+  var bar = document.createElement('div');
+  bar.className = 'summarybar';
+  bar.innerHTML = '<span data-i18n="quiz.total">' + T('quiz.total') + '</span>' +
+    '<span id="secTotal">0 / ' + q.maxTotal + '</span>';
+  wrap.appendChild(bar);
+
+  checkDraft();
+  onScoreChange();
+}
+
+function bump(input, delta) {
+  var max = Number(input.dataset.max);
+  var cur = input.value === '' ? (delta > 0 ? -1 : 1) : Number(input.value);
+  var next = Math.min(max, Math.max(0, cur + delta));
+  input.value = next;
+  onScoreChange();
+}
+
+function inputs() {
+  return Array.prototype.slice.call(
+    document.querySelectorAll('#questionList input[type=number]'));
+}
+
+function onScoreChange() {
+  var perQ = {};
+  var total = 0;
+  inputs().forEach(function (i) {
+    var max = Number(i.dataset.max);
+    var v = i.value === '' ? null : Number(i.value);
+    var bad = v !== null && (isNaN(v) || v < 0 || v > max || v !== Math.floor(v));
+    i.classList.toggle('invalid', bad);
+    if (v !== null && !bad) {
+      total += v;
+      perQ[i.dataset.qno] = (perQ[i.dataset.qno] || 0) + v;
+    }
+  });
+  (S.quiz.questions || []).forEach(function (g) {
+    var el = document.getElementById('sub-' + g.qno);
+    if (el) el.textContent = (perQ[g.qno] || 0) + ' / ' + g.maxMark;
+  });
+  var t = document.getElementById('secTotal');
+  if (t) t.textContent = total + ' / ' + S.quiz.maxTotal;
+  scheduleDraftSave();
+}
+
+/* ------------------------------------------------------------------- drafts */
+
+function collectScores() {
+  return inputs().map(function (i) {
+    return { qid: i.dataset.qid, score: i.value === '' ? null : Number(i.value) };
+  });
+}
+
+function scheduleDraftSave() {
+  clearTimeout(S.draftTimer);
+  S.draftTimer = setTimeout(saveDraft, 800);
+}
+
+function saveDraft() {
+  if (!S.quiz) return;
+  lsSet(K.draft(S.studentId, S.year, S.section), {
+    savedAt: new Date().toISOString(),
+    scores: collectScores(),
+    note: document.getElementById('attemptNote').value
+  });
+}
+
+function checkDraft() {
+  var d = lsGet(K.draft(S.studentId, S.year, S.section), null);
+  var ttl = (S.boot.settings.DRAFT_TTL_DAYS || 30) * 86400000;
+  if (d && d.savedAt && (Date.now() - new Date(d.savedAt).getTime() > ttl)) {
+    lsDel(K.draft(S.studentId, S.year, S.section));
+    d = null;
+  }
+  var box = document.getElementById('draftNotice');
+  var any = d && (d.scores || []).some(function (s) { return s.score !== null; });
+  box.classList.toggle('hidden', !any);
+  if (!any) return;
+  document.getElementById('btnResumeDraft').onclick = function () {
+    var map = {};
+    d.scores.forEach(function (s) { map[s.qid] = s.score; });
+    inputs().forEach(function (i) {
+      if (map[i.dataset.qid] !== null && map[i.dataset.qid] !== undefined) {
+        i.value = map[i.dataset.qid];
+      }
+    });
+    document.getElementById('attemptNote').value = d.note || '';
+    box.classList.add('hidden');
+    onScoreChange();
+  };
+  document.getElementById('btnDiscardDraft').onclick = function () {
+    lsDel(K.draft(S.studentId, S.year, S.section));
+    box.classList.add('hidden');
+  };
+}
+
+/* ------------------------------------------------------------------- submit */
+
+function submitQuiz() {
+  var err = document.getElementById('quizError');
+  err.classList.add('hidden');
+
+  var blanks = inputs().filter(function (i) { return i.value === ''; });
+  var invalid = inputs().filter(function (i) { return i.classList.contains('invalid'); });
+  if (invalid.length) {
+    err.textContent = T('err.generic') + '0 - max';
+    err.classList.remove('hidden');
+    invalid[0].scrollIntoView({ block: 'center' });
+    return;
+  }
+  if (blanks.length) {
+    err.textContent = T('quiz.blankLeft', { n: blanks.length });
+    err.classList.remove('hidden');
+    blanks[0].scrollIntoView({ block: 'center' });
+    blanks[0].focus();
+    return;
+  }
+
+  var job = {
+    attemptId: uuid(),
+    studentIdOverride: S.studentId,
+    year: S.year,
+    section: S.section,
+    createdTime: new Date().toISOString(),
+    note: document.getElementById('attemptNote').value,
+    scores: collectScores(),
+    tries: 0
+  };
+
+  enqueue(job);                       // local first, then network
+  lsDel(K.draft(S.studentId, S.year, S.section));
+
+  var btn = document.getElementById('btnSubmit');
+  btn.disabled = true;
+  btn.textContent = T('quiz.submitting');
+  flushQueue(true).then(function () {
+    btn.disabled = false;
+    btn.textContent = T('quiz.submit');
+  });
+}
+
+/* ------------------------------------------------ pending queue + backoff retry */
+
+function queue() { return lsGet(K.queue(S.studentId), []); }
+function setQueue(q) { lsSet(K.queue(S.studentId), q); }
+
+function enqueue(job) {
+  var q = queue();
+  q.push(job);
+  setQueue(q);
+  renderSyncBar();
+}
+
+function renderSyncBar(msg) {
+  var q = queue();
+  var bar = document.getElementById('syncBar');
+  var txt = document.getElementById('syncText');
+  if (!q.length && !msg) { bar.classList.add('hidden'); return; }
+  txt.textContent = msg || T('sync.pending', { n: q.length });
+  bar.classList.remove('hidden');
+}
+
+function flushQueue(showReport) {
+  var q = queue();
+  if (!q.length) { renderSyncBar(); return Promise.resolve(); }
+  var job = q[0];
+
+  return callServer('submitAttempt', [job])
+    .then(function (res) {
+      var rest = queue().filter(function (j) { return j.attemptId !== job.attemptId; });
+      setQueue(rest);
+      renderSyncBar(rest.length ? null : T('sync.saved'));
+      setTimeout(renderSyncBar, 2500);
+      if (showReport) openReport(res, job);
+      if (rest.length) return flushQueue(false);
+    })
+    .catch(function (e) {
+      var isTimeout = e.message === '__timeout__';
+      // A server-side validation error will never succeed on retry: drop it.
+      if (!isTimeout && !/繁忙|busy|timed out/i.test(e.message)) {
+        setQueue(queue().filter(function (j) { return j.attemptId !== job.attemptId; }));
+        var box = document.getElementById('quizError');
+        box.textContent = T('err.generic') + e.message;
+        box.classList.remove('hidden');
+        renderSyncBar();
+        return;
+      }
+      job.tries = (job.tries || 0) + 1;
+      var all = queue().map(function (j) {
+        return j.attemptId === job.attemptId ? job : j;
+      });
+      setQueue(all);
+      if (job.tries <= RETRY_DELAYS.length) {
+        renderSyncBar(T('sync.retrying', { n: job.tries }));
+        clearTimeout(S.retryTimer);
+        S.retryTimer = setTimeout(function () { flushQueue(false); },
+          RETRY_DELAYS[job.tries - 1]);
+      } else {
+        renderSyncBar(T('sync.offline'));
+      }
+    });
+}
+
+function startQueueWatcher() {
+  renderSyncBar();
+  if (queue().length) flushQueue(false);
+  // 'online' is only a hint that a retry is worth attempting; navigator.onLine
+  // alone is not a reliable signal, so we never gate the UI on it.
+  window.addEventListener('online', function () { flushQueue(false); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') saveDraft();
+    else if (queue().length) flushQueue(false);
+  });
+}
+
+/* ------------------------------------------------------------------- reports */
+
+function openReport(res, job) {
+  var card = document.getElementById('resultCard');
+  var label = job.year + ' ' + job.section + ' · ' + T('report.attemptNo', { n: res.attemptNo });
+  card.innerHTML =
+    '<div class="muted small">' + label + '</div>' +
+    '<div class="bigscore">' + res.totalScore + ' / ' + res.maxTotal + '</div>' +
+    '<div class="muted">' + res.percent + '%</div>';
+  S.lastReport = { year: job.year, section: job.section, attemptId: res.attemptId };
+  show('screen-report');
+  renderQuestionBars(job);
+  loadDashboard();
+}
+
+function renderQuestionBars(job) {
+  var map = {};
+  job.scores.forEach(function (s) { map[s.qid] = s.score; });
+  var host = document.getElementById('questionBars');
+  host.innerHTML = '';
+  (S.quiz.questions || []).forEach(function (g) {
+    var got = 0;
+    g.parts.forEach(function (p) { got += Number(map[p.qid] || 0); });
+    var rate = g.maxMark ? got / g.maxMark : 0;
+    var row = document.createElement('div');
+    row.className = 'barrow';
+    row.innerHTML =
+      '<div class="lab"><span>Q' + g.qno + '</span><span>' + got + ' / ' + g.maxMark + '</span></div>' +
+      '<div class="bar"><i style="width:' + (rate * 100) + '%"></i></div>';
+    host.appendChild(row);
+  });
+}
+
+function loadDashboard() {
+  callServer('getStudentDashboard', [{ studentIdOverride: S.studentId }])
+    .then(function (d) {
+      S.dash = d;
+      renderOverview(d);
+      renderTopics(d);
+      renderStrands(d);
+      renderRecent(d);
+      drawTrend(d);
+    })
+    .catch(function () { /* dashboard is non critical; ignore */ });
+}
+
+function renderOverview(d) {
+  var years = S.boot.years || [];
+  var map = {};
+  d.cells.forEach(function (c) { map[c.year + '|' + c.section] = c; });
+  var html = '<tr><th>' + T('th.year') + '</th><th>A(1)</th><th>A(2)</th><th>B</th></tr>';
+  years.forEach(function (y) {
+    html += '<tr><td><b>' + y + '</b></td>';
+    ['A1', 'A2', 'B'].forEach(function (s) {
+      var c = map[y + '|' + s];
+      html += '<td>' + (c
+        ? c.latest.score + ' / ' + c.best.score + ' (' + c.count + ')'
+        : '<span class="muted">—</span>') + '</td>';
+    });
+    html += '</tr>';
+  });
+  document.getElementById('overviewTable').innerHTML = html;
+}
+
+function rateClass(r, threshold) {
+  if (r < threshold) return 'rate-bad';
+  if (r < 0.8) return 'rate-warn';
+  return 'rate-ok';
+}
+
+function renderTopics(d) {
+  var host = document.getElementById('topicList');
+  var rows = d.topics.filter(function (t) { return t.enoughSample; });
+  host.innerHTML = rows.length ? '' : '<span class="muted">' + T('report.noData') + '</span>';
+  rows.slice(0, 12).forEach(function (t) {
+    var row = document.createElement('div');
+    row.className = 'barrow';
+    row.innerHTML =
+      '<div class="lab"><span>' + topicName(t) + '</span>' +
+      '<span class="' + rateClass(t.rate, d.weakThreshold) + '">' + pct(t.rate) + '% (' +
+      t.score + '/' + t.max + ')</span></div>' +
+      '<div class="bar"><i style="width:' + (t.rate * 100) + '%"></i></div>';
+    host.appendChild(row);
+  });
+  document.getElementById('topicHint').textContent =
+    T('report.sample', { n: d.minParts, p: Math.round(d.weakThreshold * 100) });
+}
+
+function renderStrands(d) {
+  var host = document.getElementById('strandList');
+  host.innerHTML = d.strands.length ? '' : '<span class="muted">' + T('report.noData') + '</span>';
+  d.strands.forEach(function (s) {
+    var row = document.createElement('div');
+    row.className = 'barrow';
+    row.innerHTML =
+      '<div class="lab"><span>' + s.strand + '</span>' +
+      '<span class="' + rateClass(s.rate, d.weakThreshold) + '">' + pct(s.rate) + '%</span></div>' +
+      '<div class="bar"><i style="width:' + (s.rate * 100) + '%"></i></div>';
+    host.appendChild(row);
+  });
+}
+
+function renderRecent(d) {
+  var html = '<tr><th>' + T('th.date') + '</th><th>' + T('th.year') + '</th><th>' +
+    T('th.section') + '</th><th>' + T('th.attempt') + '</th><th>' + T('th.score') + '</th></tr>';
+  d.recent.forEach(function (r) {
+    html += '<tr><td>' + fmtDate(r.submitTime) + '</td><td>' + r.year + '</td><td>' +
+      r.section + '</td><td>' + r.attemptNo + '</td><td>' + r.score + ' / ' + r.maxTotal +
+      '</td></tr>';
+  });
+  document.getElementById('recentTable').innerHTML = html;
+}
+
+function drawTrend(d) {
+  if (!S.chartsReady || !d.cells.length) return;
+  var target = S.lastReport || { year: S.year, section: S.section };
+  var cell = d.cells.filter(function (c) {
+    return c.year === target.year && c.section === target.section;
+  })[0] || d.cells[0];
+  if (!cell) return;
+  var data = new google.visualization.DataTable();
+  data.addColumn('string', T('th.attempt'));
+  data.addColumn('number', T('th.score'));
+  cell.series.forEach(function (p) { data.addRow([String(p.attemptNo), p.score]); });
+  new google.visualization.LineChart(document.getElementById('trendChart')).draw(data, {
+    legend: { position: 'none' },
+    vAxis: { minValue: 0, maxValue: 35 },
+    pointSize: 6,
+    chartArea: { width: '82%', height: '72%' },
+    colors: ['#1f6feb'],
+    title: cell.year + ' ' + cell.section
+  });
+}
+
+/* ---------------------------------------------------------- teacher overview */
+
+function openTeacher() {
+  busy(true);
+  callServer('getTeacherOverview', [{
+    klass: document.getElementById('fKlass').value,
+    year: document.getElementById('fYear').value,
+    section: document.getElementById('fSection').value
+  }])
+    .then(function (o) {
+      renderTeacher(o);
+      show('screen-teacher');
+    })
+    .catch(function (e) { alert(T('err.generic') + e.message); })
+    .then(function () { busy(false); });
+}
+
+function fillFilters(classes) {
+  var k = document.getElementById('fKlass');
+  if (!k.options.length) {
+    k.innerHTML = '<option value="">' + T('teacher.allClasses') + '</option>' +
+      classes.map(function (c) { return '<option>' + c + '</option>'; }).join('');
+    document.getElementById('fYear').innerHTML =
+      '<option value="">' + T('teacher.allYears') + '</option>' +
+      (S.boot.years || []).map(function (y) { return '<option>' + y + '</option>'; }).join('');
+    document.getElementById('fSection').innerHTML =
+      '<option value="">' + T('teacher.allSections') + '</option>' +
+      '<option>A1</option><option>A2</option><option>B</option>';
+  }
+}
+
+function renderTeacher(o) {
+  fillFilters(o.classes || []);
+  var s = o.summary;
+  document.getElementById('classSummary').innerHTML =
+    '<div class="muted small">' + T('teacher.activeStudents') + '：' + s.activeStudents + ' / ' +
+    s.totalStudents + '　·　' + T('teacher.submissions') + '：' + s.submissions + '</div>' +
+    '<div class="bigscore">' + pct(s.avgRate) + '%</div>' +
+    '<div class="muted small">' + T('teacher.avgRate') + '　·　' +
+    s.perSection.map(function (x) {
+      return x.section + ' ' + pct(x.avgRate) + '% (' + x.count + ')';
+    }).join('　') + '</div>';
+
+  var weak = document.getElementById('classWeak');
+  weak.innerHTML = o.weakestTopics.length ? '' : '<span class="muted">' + T('report.noData') + '</span>';
+  o.weakestTopics.forEach(function (t) {
+    var row = document.createElement('div');
+    row.className = 'barrow';
+    row.innerHTML = '<div class="lab"><span>' + topicName(t) + '</span><span class="' +
+      rateClass(t.rate, 0.6) + '">' + pct(t.rate) + '%</span></div>' +
+      '<div class="bar"><i style="width:' + (t.rate * 100) + '%"></i></div>';
+    weak.appendChild(row);
+  });
+
+  var html = '<tr><th>' + T('th.name') + '</th><th>' + T('th.class') + '</th><th>' +
+    T('th.done') + '</th><th>' + T('th.latest') + '</th><th>' + T('th.best') + '</th><th>' +
+    T('th.avg') + '</th><th>' + T('th.weak') + '</th><th>' + T('th.last') + '</th></tr>';
+  o.students.forEach(function (r) {
+    html += '<tr>' +
+      '<td><button class="cellbtn" data-email="' + r.email + '">' + r.displayName + '</button></td>' +
+      '<td>' + (r.klass || '—') + '</td>' +
+      '<td>' + r.sectionsDone + '</td>' +
+      '<td>' + (r.latestScore === null ? '—' : r.latestScore) + '</td>' +
+      '<td>' + (r.bestScore === null ? '—' : r.bestScore) + '</td>' +
+      '<td class="' + rateClass(r.avgRate, 0.6) + '">' + pct(r.avgRate) + '%</td>' +
+      '<td>' + (r.weakTopicId ? topicName(r) + ' ' + pct(r.weakRate) + '%' : '—') + '</td>' +
+      '<td>' + fmtDate(r.lastActivity) + '</td></tr>';
+  });
+  var table = document.getElementById('studentTable');
+  table.innerHTML = html;
+  Array.prototype.slice.call(table.querySelectorAll('.cellbtn')).forEach(function (b) {
+    b.onclick = function () { openStudentAsTeacher(b.dataset.email); };
+  });
+}
+
+function openStudentAsTeacher(email) {
+  busy(true);
+  callServer('getStudentDashboard', [{ targetStudent: email }])
+    .then(function (d) {
+      S.dash = d;
+      document.getElementById('resultCard').innerHTML =
+        '<div class="muted small">' + email + '</div>';
+      renderTopics(d); renderStrands(d); renderRecent(d); renderOverview(d);
+      S.lastReport = null;
+      drawTrend(d);
+      show('screen-report');
+    })
+    .catch(function (e) { alert(T('err.generic') + e.message); })
+    .then(function () { busy(false); });
+}
+
+/* ---------------------------------------------------------------------- wire */
+
+document.addEventListener('DOMContentLoaded', function () {
+  applyI18n();
+
+  document.getElementById('btnLang').onclick = function () {
+    setLang(LANG === 'zh' ? 'en' : 'zh');
+  };
+  window.onLangChanged = function () {
+    if (S.dash) { renderTopics(S.dash); renderStrands(S.dash); renderRecent(S.dash); drawTrend(S.dash); }
+  };
+  document.getElementById('btnHome').onclick = goYears;
+  document.getElementById('btnTeacher').onclick = openTeacher;
+  document.getElementById('btnApplyFilter').onclick = openTeacher;
+  document.getElementById('btnRetryNow').onclick = function () { flushQueue(false); };
+
+  document.getElementById('btnPickStudent').onclick = function () {
+    var v = document.getElementById('studentPicker').value;
+    if (!v) return;
+    lsSet(K.picked, v);
+    S.studentId = v;
+    document.getElementById('userBadge').textContent = v;
+    startQueueWatcher();
+    goYears();
+  };
+
+  Array.prototype.slice.call(document.querySelectorAll('[data-section]')).forEach(function (b) {
+    b.onclick = function () { openQuiz(b.dataset.section); };
+  });
+
+  document.getElementById('btnFillZero').onclick = function () {
+    var blanks = inputs().filter(function (i) { return i.value === ''; });
+    if (!blanks.length) return;
+    if (!confirm(T('quiz.fillZeroConfirm', { n: blanks.length }))) return;
+    blanks.forEach(function (i) { i.value = 0; });
+    onScoreChange();
+  };
+  document.getElementById('btnSubmit').onclick = submitQuiz;
+  document.getElementById('attemptNote').oninput = scheduleDraftSave;
+
+  google.charts.load('current', { packages: ['corechart'] });
+  google.charts.setOnLoadCallback(function () {
+    S.chartsReady = true;
+    if (S.dash) drawTrend(S.dash);
+  });
+
+  boot();
+});
+</script>
