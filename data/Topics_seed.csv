@@ -1,0 +1,29 @@
+TopicID,Strand,NameEN,NameZH,Level,Active
+SS01,Number and Algebra,Quadratic equations in one unknown,一元二次方程,SS,TRUE
+SS02,Number and Algebra,Functions and graphs,函數與圖像,SS,TRUE
+SS03,Number and Algebra,Exponential and logarithmic functions,指數與對數函數,SS,TRUE
+SS04,Number and Algebra,More about polynomials,多項式,SS,TRUE
+SS05,Number and Algebra,More about equations,方程進階,SS,TRUE
+SS06,Number and Algebra,Variations,變分,SS,TRUE
+SS07,Number and Algebra,Arithmetic and geometric sequences and their summations,等差與等比數列及其和,SS,TRUE
+SS08,Number and Algebra,Inequalities and linear programming,不等式與線性規劃,SS,TRUE
+SS09,"Measures, Shape and Space",More about graphs of functions,函數圖像進階,SS,TRUE
+SS10,"Measures, Shape and Space",Equations of straight lines,直線方程,SS,TRUE
+SS11,"Measures, Shape and Space",Basic properties of circles,圓的基本性質,SS,TRUE
+SS12,"Measures, Shape and Space",Loci,軌跡,SS,TRUE
+SS13,"Measures, Shape and Space",Equations of circles,圓的方程,SS,TRUE
+SS14,"Measures, Shape and Space",More about trigonometry,三角學進階,SS,TRUE
+SS15,Data Handling,Permutations and combinations,排列與組合,SS,TRUE
+SS16,Data Handling,More about probability,概率進階,SS,TRUE
+SS17,Data Handling,Measures of dispersion,離差的量度,SS,TRUE
+SS18,Data Handling,Uses and abuses of statistics,統計的用途與誤用,SS,TRUE
+SS19,Further Learning Unit,Further applications,綜合應用,SS,TRUE
+SS20,Further Learning Unit,Inquiry and investigation,探究與研習,SS,TRUE
+JS01,Junior Secondary Foundation,"Percentages, rates and ratios",百分數、率與比,JS,TRUE
+JS02,Junior Secondary Foundation,Estimation and approximation,估算與近似,JS,TRUE
+JS03,Junior Secondary Foundation,Mensuration (2D and 3D),量度（二維及三維）,JS,TRUE
+JS04,Junior Secondary Foundation,"Angles, lines and polygons",角、直線與多邊形,JS,TRUE
+JS05,Junior Secondary Foundation,"Triangles, congruence and similarity",三角形、全等與相似,JS,TRUE
+JS06,Junior Secondary Foundation,Coordinate geometry basics,坐標幾何基礎,JS,TRUE
+JS07,Junior Secondary Foundation,Basic statistics and graphs,基礎統計與統計圖,JS,TRUE
+JS08,Junior Secondary Foundation,Basic probability,基礎概率,JS,TRUE
